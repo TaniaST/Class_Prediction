@@ -1,0 +1,468 @@
+---
+author: "Tetiana Stroganova"
+date: "07/07/2019"
+documentclass: report
+fontsize: 12pt
+output: rmarkdown::github_document
+---
+## Olive Oils Origin Prediction Using Classification Methods
+
+
+
+*****
+
+## 1. Introduction
+The food authenticity testing is a valuable tool for consumers protection. It allows to check the product origin and quality and prevents any fraudulent manipulations. Recently, several products, such as wine, fish, olive oil, honey, have been identified by an initiative of the European Parliament as being the target of fraud.
+
+In this project, we will use the classification methods to predict which of three geographic regions the olive oil samples come from, based on the spectroscopic measurements. In spectroscopy, the objects are represented by a spectrum of radiation measurements or light reflection from the substance for a range of wavelengths. The challenges of spectroscopic data are typically the high dimensionality and a high level of correlation between the measurements taken at neighbouring wavelengths. 
+
+This data set is absorption levels in the near-infrared and infrared range of the spectrum (ranging from 400nm to 2498nm). It comprises 65 samples of olive oils originating from three regions: Crete, Peloponese and Other and 101 spectroscopic measurements for each of the samples (variables from 720 to 820).
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, eval= FALSE}
+# To run the code and reproduce the findings, the following packages in R must be installed:
+install.packages("randomForest")
+install.packages("devtools")
+devtools::install_github("ggobi/ggally")
+install.packages("GGally")
+install.packages("factoextra")
+install.packages("caret")
+```
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# The following libraries must be loaded:
+library(caret)
+library(factoextra)
+library(GGally)
+library(class)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(e1071)
+
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Loading the file with data
+load("oliveoils.RData")
+
+# Preparing data
+#extracting the relevant variables and adding class labels
+fulldata<-oliveoils[,c("720":"820")]
+fulldata<-cbind(oliveoillabels,as.data.frame(fulldata))
+```
+## 2. Data preparation
+The data was split into three sets: training set – 50% of the data, validation and test sets – 25% of the data each. 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# Splitting data into three sets: training, validation and test
+set.seed(200)
+train.rows<-createDataPartition(y=fulldata$oliveoillabels,p=0.5,list=FALSE)
+train.set<-fulldata[train.rows,]# 50% of data goes to training set
+testvalid<-fulldata[-train.rows,]#the remaining 50% of data
+valid.rows<-createDataPartition(y=testvalid$oliveoillabels,p=0.5,list=FALSE)
+valid.set<-testvalid[valid.rows,]
+test.set<-testvalid[-valid.rows,]
+```
+
+The proportional split between classes in each of the sets was respected:
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#checking that we've got relatively fair split between Crete/Other/Peloponese
+props<-rbind(round(prop.table(table(train.set$oliveoillabels)),2),
+round(prop.table(table(valid.set$oliveoillabels)),2),
+round(prop.table(table(test.set$oliveoillabels)),2),
+round(prop.table(table(fulldata$oliveoillabels)),2))
+rownames(props)<-c("Training set","Validation set","Test set", "Full set")
+props
+```
+
+## 3. Exploratory analysis
+As there are 101 columns with spectroscopic measurements, it’s quite difficult to visualize the data. As we can see on the boxplots graph below, there are some outliers and means vary a lot for different variables.
+
+```{r,fig.align="center", fig.width=6, fig.height=6, fig.cap="Figure 1 – Boxplots of explanatory variables", echo=FALSE, warning=FALSE, message=FALSE}
+boxplot(train.set[,-1],main="Boxplots of explanatory variables", cex.main=1.25)
+```
+
+The correlation plot indicates strong positive correlation between a fair number of variables:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.width=6, fig.height=6}
+ggcorr(train.set[,-1],palette="RdBu", label=FALSE)+
+  ggtitle("Correlation plot")+
+  theme(plot.title = element_text(hjust = 0.5, size=16, face="bold"))
+```
+This means that Principal Components Analysis would be useful to reduce the dimensionality, while keeping the variability of the data. To decide whether the PCA should be based on covariance or correlation matrix, we need to see whether the standard deviations vary a lot. 
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+sdtable<-apply(train.set[,-1],2,sd)
+```
+
+In our training data set, the standard deviations vary from 2354 to 5883, so we will base the PCA on the correlation matrix rather than on the covariance one.
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+summary(sdtable)
+```
+## 4. Dimensions reduction – PCA
+Our data set contains more variables than observations, therefore prcomp() function needs be used for PCA, the scale needs to be set to TRUE to perform the analysis based on the correlation matrix. As a rule of thumb, we will aim to keep at least 95% of variability of the data, and the method of cumulative variability will be used to decide how many PCs will be kept. 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+pca.olive<-prcomp(train.set[,-1],center=TRUE,scale=TRUE)
+```
+
+As per the results of the PCA below, the first two components allow us to keep 92.9% of variability in data, whereas the three components retain 98.6% of variability in data. Therefore, three first three PCs should be retained to ensure that at least 95% of variability are kept. 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(pca.olive)
+```
+
+Let’s check if there are any outliers in the first two PCs space:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.width=6, fig.height=6}
+p<-cbind(pca.olive$x[,1],pca.olive$x[,2])
+p<-as.data.frame(p)
+outl<-rownames(train.set[16,])
+outl<-p[rownames(p)==outl,]
+ggplot(p,aes(V1,V2))+geom_point(aes(V1,V2))+geom_point(data=outl,colour="red")+
+  geom_text(data=outl,label="outlier", vjust=2)+labs(x="PC1",y="PC2")+
+  ggtitle("Outlier detection in PC1 vs. PC2 space")+
+  theme(plot.title = element_text(hjust = 0.5, size=14, face="bold"))
+
+
+#excluding the outlier from the training set
+train.set2<-train.set[-16,]
+#rerunning PCA
+pca.olive.new<-prcomp(train.set2[,-1],center=TRUE,scale=TRUE)
+```
+
+There is one outlier, we’ll exclude it, using the outlier() function and rerun PCA. As demonstrated on the plot below, there is no more outliers, so we can keep the second PCA results.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.width=6, fig.height=6}
+#checking if any outliers left
+p2<-cbind(pca.olive.new$x[,1],pca.olive.new$x[,2])
+p2<-as.data.frame(p2)
+ggplot(p2,aes(V1,V2))+geom_point(aes(V1,V2))+labs(x="PC1",y="PC2")+
+  ggtitle("PC1 vs. PC2 space after outlier removal")+
+  theme(plot.title = element_text(hjust = 0.5, size=14, face="bold"))
+```
+
+After removing the outlier and rerunning the PCA, the first two PCs allow us to keep 91.4% and the first three – 98.3%, so the first three PCs need to be retained.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(pca.olive.new)
+```
+
+We can visualize the three classes in the new reduced space, using fviz_pca_ind function from factoextra library:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.width=6, fig.height=6}
+#visualising the classes in the new space
+fviz_pca_ind(pca.olive.new, geom.ind = "point", pointshape = 21, 
+             pointsize = 2, 
+             fill.ind = train.set2$oliveoillabels, 
+             col.ind = "black", 
+             palette = "jco", 
+             addEllipses = TRUE,
+             label = "var",
+             col.var = "black",
+             repel = TRUE,
+             legend.title = "Regions") +
+  ggtitle("2D PCA-plot from 101 feature dataset") +
+  theme(plot.title = element_text(hjust = 0.5, size=14, face="bold"))
+```
+
+As the goal of the project is classification and the PCA technique is only used for the dimensionality reduction, we will not discuss the loadings or scores in detail. 
+
+We have obtained the scores for the training set, but we also need to calculate the corresponding scores for the validation and test sets, using the function predict. 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#calculating the observations in the reduced space for the training set
+scores<-pca.olive.new$x[,c(1:3)]
+final.train.set<-cbind(train.set2$oliveoillabels,as.data.frame(scores))
+colnames(final.train.set)[1]<-c("oliveoillabels")
+
+
+#calculating the observations in the reduced space for the validation set
+final.valid.set<-predict(pca.olive.new,valid.set[,-1])
+final.valid.set<-cbind(valid.set$oliveoillabels,as.data.frame(final.valid.set))
+final.valid.set<-final.valid.set[,1:4]
+colnames(final.valid.set)[1]<-c("oliveoillabels")
+
+
+#calculating the observations in the reduced space for the test set
+final.test.set<-predict(pca.olive.new,test.set[,-1])
+final.test.set<-cbind(test.set$oliveoillabels,as.data.frame(final.test.set))
+final.test.set<-final.test.set[,1:4]
+colnames(final.test.set)[1]<-c("oliveoillabels")
+
+```
+
+## 5. Classification techniques
+All the classification techniques below will be applied using the PCA-transformed data sets. The models will be trained, using the training set.  The prediction will be made, based on the validation set, using predict() function. The predicting performance will be assessed, using confusionMatrix() function from caret library. 
+
+The parameters we will use to assess the models are the following:
+
+* Overall accuracy - percentage of correctly classified observations across all the classes.
+
+* Kappa - how the model exceeded random predictions in terms of accuracy.
+
+* Sensitivity - what percentage of the observations in a class were correctly classified.
+
+* Specificity - what percentage of the observations were not predicted to be in a certain class when they should not have been predicted.
+
+* Balanced accuracy - balance between correctly predicting a class and correctly not predicting it when it’s not the case, calculated as (sensitivity+specificity)/2 
+
+## 5.1	k-nearest neighbours
+The first classification technique we will use is k-nearest neighbours. We will use traincontrol() and train() functions from caret library to find the best model. We will use a “repeatedcv” method in traincontrol() function. The “repeatedcv” cross-validation method with number set to 10 and repeats set to 3 mean that the training data set will be divided into 10 parts, and then each of the parts will be used as a test set for a model trained on the remaining 9. Then the average error is obtained from these 10 models. In three repeats, we will perform the average of 3 error terms calculated by running 10 fold CV three times. The train function then selects the best model based on accuracy. In our case, the best model is the one with k=15.
+
+```{r warning=FALSE, message=FALSE, echo=FALSE,results="hide"}
+#using 10 fold cross-validation with 3 repeats to train the model:
+trctrl <- trainControl(method = "repeatedcv", number=10, repeats = 3)
+knn_fit <- train(oliveoillabels ~., data = final.train.set, method = "knn",
+                 trControl=trctrl, preProcess = c("center", "scale"),
+                 tuneLength = 20)
+#showing the result
+knn_fit
+```
+
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+#predicting the classes, using the validation set
+valid.predict<-predict(knn_fit,newdata=final.valid.set)
+#assessing the predicting performance of the model
+confusionMatrix(valid.predict,final.valid.set$oliveoillabels)
+```
+
+We can now predict the classes and assess the model, using the validation data set. 
+The overall accuracy of the model is 64.7% with no-information rate 41% (this rate will be the same for all models based on the same data), the Kappa is 44%, so the model performs better than a simple guess, but the prediction power is still quite poor. It doesn't identify the Crete region at all but predicts the Peloponese and Other classes correctly in 86% and 100% of cases respectively. With regards to specificity, when we shouldn't have predicted a class, we didn't do so correctly in 100% of cases for Crete, 92% for Other class and 50% for Peloponese. The balanced accuracy is 50% for Crete, 96% for Other class and 68% for Peloponese region.
+
+## 5.2	Fully-grown tree and pruned tree
+The next technique we will use is classification trees. We will perform it, using rpart() function from rpart library and rpart.plot() for visualization.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.width=13, fig.height=8}
+#creating the model
+tree_grown <- rpart(oliveoillabels~PC1+PC2+PC3,
+                    data = final.train.set, method = "class",
+                    cp=-1,minsplit = 2, minbucket = 1)
+#visualising the tree
+rpart.plot(tree_grown,type=2,extra=4, tweak=1.3, under=TRUE, main ="Fully grown classification tree", cex.main=1.5)
+```
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+#predicting the classes, using the validation set
+valid.tree.predict<-predict(tree_grown,newdata=final.valid.set, type="class")
+#assessing the predicting performance of the model
+confusionMatrix(valid.tree.predict,final.valid.set$oliveoillabels)
+```
+
+This model gives worse results than the k-nearest neighbours technique: the overall accuracy is 52.9%, and the Kappa is 27%. The sensitivity is 20% for Crete, 80% for the Other class and 57% for Peloponese region. Turning now to specificity, it’s equal to 83% for Crete, 92% for the Other class and 50% for Peloponese.
+
+In order to improve the accuracy of the model, we will try to prune the tree, using the printcp() function. We will prune, using the cp of the largest tree that is within one standard deviation of the tree with the smallest xerror. 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#pruning method:
+printcp(tree_grown)
+```
+
+
+The smallest xerror is 0.73684, its standard deviation is 0.147697. So, we will choose the largest tree with xerror less than 0.884537. There are 3 trees satisfying this rule, we will select the one with less splits, so the one with cp= 0.052632. 
+
+The pruned tree is smaller than the fully grown one:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.width=6, fig.height=6}
+
+tree_pruned<-prune(tree_grown,cp=.055)
+#visualising the tree
+rpart.plot(tree_pruned,type=2,extra=4, tweak=1.2, under=TRUE, main="Pruned classification tree")
+
+#predicting the classes, using the validation set
+valid.tree.pruned.predict<-predict(tree_pruned,newdata=final.valid.set,type="class")
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+#assessing the predicting performance of the model
+confusionMatrix(valid.tree.pruned.predict,final.valid.set$oliveoillabels)
+```
+
+The pruned tree model gives better results in terms of prediction than the fully grown one: the overall accuracy of the pruned tree model is 64.7% and Kappa - 46%. The sensitivity is 40% for Crete, 100% for Other class, and 57% for Peloponese region. The specificity is 92% for Crete, 83% for Other class and 70% for Peloponese.
+
+## 5.3 Random forest model
+The next model we will use is the random forest. We create it by using the randomForest() function from the randomForest library.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+for_tree<-randomForest(oliveoillabels~PC1+PC2+PC3,data=final.train.set,ntree=200)
+for_tree
+
+#predicting the classes, using the validation set
+valid.for.tree.predict<-predict(for_tree,newdata = final.valid.set,type="class")
+
+#assessing the predicting performance of the model
+confusionMatrix(valid.for.tree.predict,final.valid.set$oliveoillabels)
+```
+
+The performance seems to be similar with the fully-grown tree model in terms of the overall accuracy at 52.9%, the Kappa is the same at 27%. The sensitivity and specificity parameters are different from the fully-grown tree model: the model correctly identifies Crete region in 40% of cases, Other region in 60% of cases and Peloponese region in 57% of cases. Concerning specificity, the results are following: 83% for Crete, 92% for Other class and 50% for Peloponese region.
+
+## 5.4	Support vector machines models
+Turning to the support vector machines models, three models will be considered: linear, radial and polynomial. We want to choose the best model, so we will use tune.svm command to pick the best parameters using cross-validation on the training data set. 
+
+## 5.4.1 Linear SVM
+As per the results of tuning the model with different cost parameters (0.1, 0.5, 1, 2, 5, 10), the best cost parameter for the linear model is 0.5, we will use this model for the prediction on the validation set. 
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+#setting cost parameters
+C.val<-c(0.1,0.5,1,2,5,10)
+
+#choosing best linear SVM model
+tuning.lin.svm<-tune.svm(oliveoillabels~.,data=final.train.set,type="C-classification",
+                         kernel="linear", cost=C.val)
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+summary(tuning.lin.svm)
+```
+
+This model offers the best accuracy so far with the overall accuracy at 70.6% and Kappa - 55%. The sensitivity for Crete is 40%, 100% for the Other class and 71% for Peloponese region. The specificity results are quite high as well: 92% for Crete and Other class and 70% for Peloponese region.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+#the best cost parameter is 0.5, let's fit the linear SVM with this cost parameter:
+lin.svm<-tuning.lin.svm$best.model
+
+#predicting the classes, using the validation set
+valid.lin.svm.predict<-predict(lin.svm,newdata=final.valid.set,type="class")
+
+#assessing the predicting performance of the model
+confusionMatrix(valid.lin.svm.predict,final.valid.set$oliveoillabels)
+```
+
+The graph below visualizes the classification of linear SVM:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.width=6, fig.height=6}
+#visualising the boundaries set by the linear SVM to predict classes:
+plot(lin.svm,final.valid.set, PC1~PC2,slice=list(PC3=3))
+```
+
+## 5.4.2 Radial SVM
+The same cost parameters are used for the radial SVM as the ones we set for the linear SVM above. An additional parameter to set for the radial model is gamma, we have chosen the values as follows: (0.5, 1, 2, 3, 4). As per the results of the tuning, the best cost and gamma parameters for the radial SVM are 1 and 0.5 respectively.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+#radial SVM
+tuning.rad.svm<- tune.svm(oliveoillabels~.,data=final.train.set,type="C-classification",kernel="radial", cost=C.val,gamma = c(0.5,1,2,3,4))
+tuning.rad.svm
+```
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+#the best parameters are gamma 0.5 and cost 1
+rad.svm<-tuning.rad.svm$best.model
+
+#predicting the classes, using the validation set
+valid.rad.svm.predict<-predict(rad.svm,newdata=final.valid.set)
+
+#assessing the predicting performance of the model
+confusionMatrix(valid.rad.svm.predict,final.valid.set$oliveoillabels)
+```
+
+In terms of the performance, the radial SVM is similar with the pruned tree model – with the same overall accuracy at 64.7% and a slightly lower Kappa at 45%. It identifies the Crete class correctly in 20% of cases, the Other class in 100% of cases and Peloponese region in 71% of cases. The specificity parameters are 100% for Crete, 83% for Other class and 60% for Peloponese region. The plot below reflects the classification using the radial SVM:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE,fig.align="center", fig.width=6, fig.height=6}
+#visualising the boundaries set by the radial SVM
+plot(rad.svm,final.valid.set, PC1~PC2,slice=list(PC3=3))
+```
+
+## 5.4.3 Polynomial SVM
+The same cost parameters are used for the polynomial SVM as the ones we set for the linear SVM above. The additional parameters to set for the radial model are gamma, degree of polynomial and coef0, we have chosen the values as follows:
+
+* degree – (2,3), 
+* coef0 - (0.5, 1, 2, 3, 4), 
+* gamma - (0.5, 1, 2, 3).
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+tuning.pol.svm<-tune.svm(oliveoillabels~.,data=final.train.set,type="C-classification",kernel="polynomial", degree=c(2,3),coef0=c(0.5,1,2,3,4),cost=C.val,gamma = c(0.5,1,2,3))
+
+tuning.pol.svm
+```
+
+As per the tuning results, the best parameters for the polynomial SVM are the following:
+
+* degree – 2, 
+* gamma – 0.5, 
+* coef0 – 1, 
+* cost – 0.1. 
+
+Concerning the performance of the model, it performs almost as well as the linear SVM: the overall performance is the same – 70.6%, Kappa is slightly lower – 54%. The model correctly predicts the Crete, Other and Peloponese regions in 20%, 100% and 86% of cases respectively. The specificity coefficients are 100%, 92% and 60% for Crete, Other and Peloponese regions respectively.
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+#the best parameters for polynomial SVM are gamma 0.5, coef0 1, degree 2 and cost parameter 0.1.
+
+pol.svm<-tuning.pol.svm$best.model
+
+#predicting the classes, using the validation set
+valid.pol.svm.predict<-predict(pol.svm,newdata=final.valid.set)
+
+#assessing the predicting performance of the model
+confusionMatrix(valid.pol.svm.predict,final.valid.set$oliveoillabels)
+```
+
+The corresponding classification plot illustrates the boundaries set by the polynomial SVM:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.align="center", fig.width=6, fig.height=6}
+#visualising the polynomial SVM: 
+plot(pol.svm,final.valid.set, PC1~PC2,slice=list(PC3=3))
+```
+
+## 6. Models comparison and selection
+We have already discussed the results each model provides us with, based on the validation data set. Let’s summarise this information and compare the models in terms of the overall accuracy and the Kappa parameter:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+comparison<-rbind(confusionMatrix(valid.predict,final.valid.set$oliveoillabels)$overall[c("Accuracy","Kappa")],
+                  confusionMatrix(valid.tree.predict,final.valid.set$oliveoillabels)$overall[c("Accuracy","Kappa")],
+                  confusionMatrix(valid.tree.pruned.predict,final.valid.set$oliveoillabels)$overall[c("Accuracy","Kappa")],
+                  confusionMatrix(valid.for.tree.predict,final.valid.set$oliveoillabels)$overall[c("Accuracy","Kappa")],
+                  confusionMatrix(valid.lin.svm.predict,final.valid.set$oliveoillabels)$overall[c("Accuracy","Kappa")],
+                  confusionMatrix(valid.rad.svm.predict,final.valid.set$oliveoillabels)$overall[c("Accuracy","Kappa")],
+                  confusionMatrix(valid.pol.svm.predict,final.valid.set$oliveoillabels)$overall[c("Accuracy","Kappa")])
+rownames(comparison)<-c("K-nearest neigbours", "Fully-grown tree", "Pruned tree","Random forest", "Linear SVM","Radial SVM","Polynomial SVM")
+comparison<-as.data.frame(comparison)
+round(comparison[order(-comparison$Accuracy,-comparison$Kappa),],3)
+```
+
+The best model in terms of the overall accuracy and Kappa is the linear SVM, it has the same overall accuracy as the polynomial SVM, but its Kappa is one point higher.
+Let’s have a look at the balanced accuracy parameter for each model as it considers both sensitivity and specificity of each class:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+bal_acc<-rbind(confusionMatrix(valid.predict,final.valid.set$oliveoillabels)$byClass[,"Balanced Accuracy"],
+                  confusionMatrix(valid.tree.predict,final.valid.set$oliveoillabels)$byClass[,"Balanced Accuracy"],
+                  confusionMatrix(valid.tree.pruned.predict,final.valid.set$oliveoillabels)$byClass[,"Balanced Accuracy"],
+                  confusionMatrix(valid.for.tree.predict,final.valid.set$oliveoillabels)$byClass[,"Balanced Accuracy"],
+                  confusionMatrix(valid.lin.svm.predict,final.valid.set$oliveoillabels)$byClass[,"Balanced Accuracy"],
+                  confusionMatrix(valid.rad.svm.predict,final.valid.set$oliveoillabels)$byClass[,"Balanced Accuracy"],
+                  confusionMatrix(valid.pol.svm.predict,final.valid.set$oliveoillabels)$byClass[,"Balanced Accuracy"])
+rownames(bal_acc)<-c("K-nearest neigbours", "Fully-grown tree", "Pruned tree","Random forest", "Linear SVM","Radial SVM","Polynomial SVM")
+bal_acc<-as.data.frame(bal_acc)
+round(bal_acc[order(-bal_acc$`Class: Other`,-bal_acc$`Class: Crete`),],2)
+```
+
+As we can see from the table, the linear and polynomial SVMs achieve the best balanced accuracy for the regions, with the linear SVM performing slightly better than the polynomial SVM, as it has the highest percentages overall for both Crete and Other region, and its balanced accuracy for the Peloponese region is only 2% lower than the result provided by the polynomial SVM. Based on the above arguments, we will select the linear SVM as the best performing model.
+
+## 7.Testing
+Let’s see how the linear SVM performs when used on the test data set.
+```{r echo=FALSE, warning=FALSE, message=FALSE, results="hide"}
+#predicting the classes, using the test set
+final.test.predict<-predict(lin.svm,newdata=final.test.set)
+#assessing the predicting performance of the model
+confusionMatrix(final.test.predict,final.test.set$oliveoillabels)
+```
+
+The linear SVM predictive performance is much better on the test data set than it was on the validation one: the overall accuracy of the model is 86.7% and Kappa is 78%. The model correctly identifies Crete region in 50% of cases, and both Other and Peloponese region in 100% of cases. The specificity parameters are high as well: 100% for Crete and Other region and 75% for Peloponese. Finally, the balanced accuracy of the regions is 75%, 100% and 88% for Crete, Other and Peloponese regions respectively.
+The classification plot demonstrates the boundaries set by the linear SVM on the test set space:
+
+```{r echo=FALSE, warning=FALSE, message=FALSE,fig.align="center", fig.width=6, fig.height=6}
+#visualising the linear SVM classification with test set:
+plot(lin.svm,final.test.set, PC1~PC2,slice=list(PC3=3))
+```
+
+## 8.	Conclusions
+We have analysed a data set with 65 samples and 101 spectroscopic measurements of olive oil originating from three regions: Crete, Other and Peloponese. Our goal was to create a model identifying the region of a sample, based on the spectroscopic measurements. The exploratory analysis has shown that the explanatory variables are strongly positively correlated, which means that PCA technique could be used to reduce the dimensionality of the data. As result of PCA, three principal components have been retained and have allowed us to keep 98% of the variability in the data. 
+
+The following classification techniques have been applied to the training set: k-nearest neighbours, fully-grown and pruned classification trees, random forest, and linear, radial and polynomial SVMs. The comparison of predicting performance, based on the validation data set, has revealed that the linear SVM has the best predictive power, therefore it was selected for testing on the final test set. The performance of the model on the test set has given better results, compared with the performance based on the validation data: the overall accuracy is 86.7% which is 16.1% higher than the corresponding figure calculated for the validation data set.
+
+
+
+
+
+
+
+
+
+
+
