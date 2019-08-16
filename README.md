@@ -7,5 +7,8 @@ To reproduce the results:
 * Install all the packages mentioned in requirements.txt file
 * Run script.R file
 
+## Results
+To see the results of the analysis, consult the Olive_Oils_Origin_Prediction_Report.md file.
+
 
 
