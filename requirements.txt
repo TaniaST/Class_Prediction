@@ -1,0 +1,7 @@
+You need to install these packages:
+install.packages("randomForest")
+install.packages("devtools")
+devtools::install_github("ggobi/ggally")
+install.packages("GGally")
+install.packages("factoextra")
+install.packages("caret")

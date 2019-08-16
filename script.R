@@ -1,10 +1,4 @@
-#loading needed packages and libraries
-install.packages("randomForest")
-install.packages("devtools")
-devtools::install_github("ggobi/ggally")
-install.packages("GGally")
-install.packages("factoextra")
-install.packages("caret")
+#loading needed libraries
 
 library(caret)
 library(factoextra)
