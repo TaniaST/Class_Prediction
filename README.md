@@ -4,11 +4,12 @@ This repository contains the code for prediction of olive oils origin using diff
 ## Installation & Usage
 To reproduce the results:
 * Clone a copy of this repository to your computer
+* Extract all the files from the zip folder
 * Install all the packages mentioned in requirements.txt file
 * Run script.R file
 
 ## Results
-To see the results of the analysis, open the Olive_Oils_Origin_Prediction_Report.md file.
+To see the results of the analysis, open the Olive_Oils_Origin_Prediction_Report.md file in this repository.
 
 
 
